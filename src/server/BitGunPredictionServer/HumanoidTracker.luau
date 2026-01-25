@@ -1,3 +1,8 @@
+--[[
+	last edited: 25/01/2026
+	by: RiseBit, discord: risebit
+--]]
+
 local HumanoidTracker = {}
 
 --[[ =========  SERVICES  ========= ]]

@@ -1,3 +1,8 @@
+--[[
+	last edited: 25/01/2026
+	by: RiseBit, discord: risebit
+--]]
+
 --[[ =========  TYPE  ========= ]]
 export type ConfigType = {
 	Origin: Vector3,
@@ -19,7 +24,7 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 --[[ =========  CONSTANTS  ========= ]]
-local GRAVITY = Vector3.new(0, -196.2/4, 0)
+local GRAVITY = Vector3.new(0, -196.2/2, 0)
 
 --[[ =========  VARIABLES  ========= ]]
 local ActiveProjectiles = {}
@@ -43,6 +48,147 @@ function TrajectoryCalculator.Exponential(bullet)
 	local direction = currentVelocity.Unit
 	
 	return newPos, direction
+end
+
+function TrajectoryCalculator.SineWave(bullet)
+	local t = bullet.ElapsedTime
+	local amplitude = bullet.Amplitude or 3
+	local frequency = bullet.Frequency or 5
+	
+	local forward = bullet.InitialDirection
+	local right = forward:Cross(Vector3.yAxis).Unit
+	if right.Magnitude < 0.01 then
+		right = forward:Cross(Vector3.xAxis).Unit
+	end
+	
+	local basePos = bullet.Origin + (forward * bullet.Speed * t)
+	local sineOffset = right * math.sin(t * frequency) * amplitude
+	local newPos = basePos + sineOffset
+	
+	local cosComponent = math.cos(t * frequency) * amplitude * frequency
+	local tangent = (forward * bullet.Speed + right * cosComponent).Unit
+	
+	return newPos, tangent
+end
+
+function TrajectoryCalculator.Spiral(bullet)
+	local t = bullet.ElapsedTime
+	local radius = bullet.Radius or 2
+	local rotationSpeed = bullet.RotationSpeed or 8
+	
+	local forward = bullet.InitialDirection
+	local right = forward:Cross(Vector3.yAxis).Unit
+	if right.Magnitude < 0.01 then
+		right = forward:Cross(Vector3.xAxis).Unit
+	end
+	local up = right:Cross(forward).Unit
+	
+	local basePos = bullet.Origin + (forward * bullet.Speed * t)
+	local spiralOffset = (right * math.cos(t * rotationSpeed) + up * math.sin(t * rotationSpeed)) * radius
+	local newPos = basePos + spiralOffset
+	
+	local tangentSpiral = (-right * math.sin(t * rotationSpeed) + up * math.cos(t * rotationSpeed)) * radius * rotationSpeed
+	local tangent = (forward * bullet.Speed + tangentSpiral).Unit
+	
+	return newPos, tangent
+end
+
+function TrajectoryCalculator.Decelerate(bullet)
+	local t = bullet.ElapsedTime
+	local decayRate = bullet.DecayRate or 2
+	
+	local distance = bullet.Speed * (1 - math.exp(-decayRate * t)) / decayRate
+	local newPos = bullet.Origin + (bullet.InitialDirection * distance)
+	
+	return newPos, bullet.InitialDirection
+end
+
+function TrajectoryCalculator.Accelerate(bullet)
+	local t = bullet.ElapsedTime
+	local acceleration = bullet.Acceleration or 50
+	
+	local distance = (bullet.Speed * t) + (0.5 * acceleration * t * t)
+	local newPos = bullet.Origin + (bullet.InitialDirection * distance)
+	
+	return newPos, bullet.InitialDirection
+end
+
+function TrajectoryCalculator.Boomerang(bullet)
+	local t = bullet.ElapsedTime
+	local peakTime = bullet.PeakTime or (bullet.Lifetime / 2)
+	
+	local progress
+	if t < peakTime then
+		progress = t / peakTime
+		progress = progress * (2 - progress)
+	else
+		local returnProgress = (t - peakTime) / peakTime
+		progress = 1 - (returnProgress * returnProgress)
+	end
+	
+	local maxDistance = bullet.Speed * peakTime * 0.5
+	local newPos = bullet.Origin + (bullet.InitialDirection * maxDistance * progress)
+	
+	local direction = bullet.InitialDirection
+	if t >= peakTime then
+		direction = -bullet.InitialDirection
+	end
+	
+	return newPos, direction
+end
+
+function TrajectoryCalculator.QuadraticBezier(bullet)
+	local t = bullet.ElapsedTime / bullet.Lifetime
+	t = math.clamp(t, 0, 1)
+	
+	local p0 = bullet.Origin
+	local totalDistance = bullet.Speed * bullet.Lifetime
+	local p2 = bullet.ControlPoint2 or (bullet.Origin + bullet.InitialDirection * totalDistance)
+	
+	local controlOffset = bullet.ControlOffset or Vector3.new(totalDistance * 0.3, 0, 0)
+	local p1 = bullet.ControlPoint1 or (p0 + bullet.InitialDirection * totalDistance * 0.5 + controlOffset)
+	
+	local oneMinusT = 1 - t
+	local newPos = (oneMinusT * oneMinusT) * p0 
+		+ (2 * oneMinusT * t) * p1 
+		+ (t * t) * p2
+	
+	local tangent = (2 * oneMinusT * (p1 - p0) + 2 * t * (p2 - p1)).Unit
+	
+	return newPos, tangent
+end
+
+function TrajectoryCalculator.CubicBezier(bullet)
+	local t = bullet.ElapsedTime / bullet.Lifetime
+	t = math.clamp(t, 0, 1)
+	
+	local p0 = bullet.Origin
+	local totalDistance = bullet.Speed * bullet.Lifetime
+	local p3 = bullet.ControlPoint3 or (bullet.Origin + bullet.InitialDirection * totalDistance)
+	
+	local controlOffset1 = bullet.ControlOffset1 or Vector3.new(totalDistance * 0.25, 0, 0)
+	local controlOffset2 = bullet.ControlOffset2 or Vector3.new(-totalDistance * 0.25, 0, 0)
+	local p1 = bullet.ControlPoint1 or (p0 + bullet.InitialDirection * totalDistance * 0.33 + controlOffset1)
+	local p2 = bullet.ControlPoint2 or (p0 + bullet.InitialDirection * totalDistance * 0.66 + controlOffset2)
+	
+	local oneMinusT = 1 - t
+	local oneMinusT2 = oneMinusT * oneMinusT
+	local oneMinusT3 = oneMinusT2 * oneMinusT
+	local t2 = t * t
+	local t3 = t2 * t
+	
+	local newPos = oneMinusT3 * p0 
+		+ (3 * oneMinusT2 * t) * p1 
+		+ (3 * oneMinusT * t2) * p2 
+		+ t3 * p3
+	
+	local tangent = (
+		3 * oneMinusT2 * (p1 - p0) 
+		+ 6 * oneMinusT * t * (p2 - p1) 
+		+ 3 * t2 * (p3 - p2)
+	).Unit
+	
+	return newPos, tangent
 end
 
 --[[ =========  HELPER FUNCTION  ========= ]]
@@ -84,7 +230,7 @@ local function StepSimulation(dt)
 	end
 end
 
-local function ProcessCatchUp(origin, unitDir, speed, startTime, trajectoryCalculator, onStep, onFinish)
+local function ProcessCatchUp(origin, unitDir, speed, lifetime, startTime, trajectoryCalculator, onStep, onFinish)
 	local now = Workspace:GetServerTimeNow()
 	local actualStartTime = startTime or now
 	local timePassed = math.max(0, now - actualStartTime)
@@ -97,6 +243,7 @@ local function ProcessCatchUp(origin, unitDir, speed, startTime, trajectoryCalcu
 			Origin = origin,
 			InitialDirection = unitDir,
 			Speed = speed,
+			Lifetime = lifetime,
 			ElapsedTime = timePassed,
 		}
 		
@@ -176,6 +323,7 @@ function ProjectileSimulation.Create(config: ConfigType)
 		config.Origin, 
 		unitDir, 
 		config.Speed, 
+		config.Lifetime,
 		config.StartTime, 
 		TrajectoryCalculator[config.SimulationType], 
 		config.OnStep, 
@@ -207,68 +355,6 @@ function ProjectileSimulation.Create(config: ConfigType)
 		ProjectileKeyMap[config.BulletKey] = bullet
 	end
 end
-
--- function ProjectileSimulation.Linear(origin: Vector3, direction: Vector3, speed: number, lifetime: number, startTime: number?, onStep, onFinish, bulletKey: string?)
--- 	local unitDir = direction.Unit
-	
--- 	local didHit, startPos, startDir, timePassed = ProcessCatchUp(origin, unitDir, speed, startTime, Linear, onStep, onFinish)
-	
--- 	if didHit then
--- 		return 
--- 	end
-
--- 	local bullet = {
--- 		Key = bulletKey,
--- 		Origin = origin,
--- 		InitialDirection = unitDir,
--- 		CurrentPos = startPos,
--- 		Direction = startDir,
--- 		Speed = speed,
--- 		Lifetime = lifetime,
--- 		ElapsedTime = timePassed,
--- 		OnStep = onStep,
--- 		OnFinish = onFinish,
--- 		Removed = false,
--- 		TrajectoryCalculator = TrajectoryCalculator.Linear,
--- 	}
-	
--- 	table.insert(ActiveProjectiles, bullet)
-	
--- 	if bulletKey then
--- 		ProjectileKeyMap[bulletKey] = bullet
--- 	end
--- end
-
--- function ProjectileSimulation.Exponential(origin: Vector3, direction: Vector3, speed: number, lifetime: number, startTime: number?, onStep, onFinish, bulletKey: string?)
--- 	local unitDir = direction.Unit
-	
--- 	local didHit, startPos, startDir, timePassed = ProcessCatchUp(origin, unitDir, speed, startTime, Exponential, onStep, onFinish)
-	
--- 	if didHit then
--- 		return 
--- 	end
-
--- 	local bullet = {
--- 		Key = bulletKey,
--- 		Origin = origin,
--- 		InitialDirection = unitDir,
--- 		CurrentPos = startPos,
--- 		Direction = startDir,
--- 		Speed = speed,
--- 		Lifetime = lifetime,
--- 		ElapsedTime = timePassed,
--- 		OnStep = onStep,
--- 		OnFinish = onFinish,
--- 		Removed = false,
--- 		TrajectoryCalculator = Exponential,
--- 	}
-	
--- 	table.insert(ActiveProjectiles, bullet)
-	
--- 	if bulletKey then
--- 		ProjectileKeyMap[bulletKey] = bullet
--- 	end
--- end
 
 function ProjectileSimulation.StopProjectile(bulletKey: string)
 	local bullet = ProjectileKeyMap[bulletKey]

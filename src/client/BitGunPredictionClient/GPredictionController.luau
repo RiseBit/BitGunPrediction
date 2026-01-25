@@ -1,3 +1,8 @@
+--[[
+	last edited: 25/01/2026
+	by: RiseBit, discord: risebit
+--]]
+
 local GPredictionController = {}
 
 --[[ =========  SERVICES  ========= ]]
@@ -18,8 +23,11 @@ local shotIndex = 0
 local MAX_SHOT_INDEX = 255
 
 --[[ =========  PUBLIC FUNCTION  ========= ]]
-function GPredictionController.GlobalInit(visualOnStep, visualOnFinish, replicatedHitOnStep)
-	if isInit then return end
+function GPredictionController.GlobalInit(visualOnStep, visualOnFinish, onHitAcknowledge)
+	if isInit then
+		warn("[GPredictionController] already initialized!")
+		return
+	end
 	isInit = true
 	
 	ProjectileSimulation.Start()
@@ -27,6 +35,7 @@ function GPredictionController.GlobalInit(visualOnStep, visualOnFinish, replicat
 	local clientComm = Comm.ClientComm.new(Config.EventParent, false, Config.EventName)
 	clientEvent = clientComm:GetSignal(Config.EventName)
 	clientHitEvent = clientComm:GetSignal(Config.HitEventName)
+	local clientHitAckEvent = clientComm:GetSignal(Config.HitAckEventName)
 	
 	clientEvent:Connect(function(player, origin, direction, speed, lifetime, timestamp, shotId, simType)
 
@@ -34,11 +43,7 @@ function GPredictionController.GlobalInit(visualOnStep, visualOnFinish, replicat
 		
 		local function onStepWrapper(startCF, endCF)
 			if visualOnStep then
-				visualOnStep(startCF, endCF, player, bulletKey)
-			end
-			
-			if replicatedHitOnStep then
-				return replicatedHitOnStep(startCF, endCF, player)
+				return visualOnStep(startCF, endCF, player, bulletKey)
 			end
 			
 			return false
@@ -65,10 +70,19 @@ function GPredictionController.GlobalInit(visualOnStep, visualOnFinish, replicat
 		local bulletKey = shooterPlayer.UserId .. "_" .. shotId
 		ProjectileSimulation.StopProjectile(bulletKey)
 	end)
+	
+	clientHitAckEvent:Connect(function(confirmed, hitPart, hitPosition, shotId)
+		if onHitAcknowledge then
+			onHitAcknowledge(confirmed, hitPart, hitPosition, shotId)
+		end
+	end)
 end
 
 function GPredictionController.FireProjectile(origin, direction, speed, lifetime, simType, visualOnStep, visualOnFinish)
-	if not isInit then warn("GPredictionController not initialized!") return end
+	if not isInit then
+		warn("[GPredictionController] not initialized!")
+		return
+	end
 	
 	local now = Workspace:GetServerTimeNow()
 	shotIndex = (shotIndex % MAX_SHOT_INDEX) + 1
@@ -88,6 +102,7 @@ function GPredictionController.FireProjectile(origin, direction, speed, lifetime
 			if visualOnStep then 
 				result = visualOnStep(startCF, endCF, Players.LocalPlayer) 
 			end
+			
 			if result and typeof(result) == "RaycastResult" then
 				hasHit = true
 				clientHitEvent:Fire(result.Instance, result.Position, Workspace:GetServerTimeNow(), shotId, simType, speed)

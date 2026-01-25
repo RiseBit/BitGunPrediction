@@ -1,3 +1,8 @@
+--[[
+	last edited: 25/01/2026
+	by: RiseBit, discord: risebit
+--]]
+
 local GPredictionService = {}
 
 --[[ =========  SERVICES  ========= ]]
@@ -73,7 +78,10 @@ end
 
 --[[ =========  PUBLIC FUNCTION  ========= ]]
 function GPredictionService.GlobalInit(callbacks)
-	if isInit then return end
+	if isInit then
+		warn("[GPredictionService] already initialized!")
+		return
+	end
 	isInit = true
 	
 	ProjectileSimulation.Start()
@@ -83,23 +91,45 @@ function GPredictionService.GlobalInit(callbacks)
 	local serverComm = Comm.ServerComm.new(Config.EventParent, Config.EventName)
 	local serverEvent = serverComm:CreateSignal(Config.EventName, false, nil, nil, Config.EventRateLimit)
 	local serverHitEvent = serverComm:CreateSignal(Config.HitEventName, false, nil, nil, Config.HitEventRateLimit)
+	local serverHitAckEvent = serverComm:CreateSignal(Config.HitAckEventName)
 
 	Players.PlayerRemoving:Connect(function(player)
 		ActiveShots[player.UserId] = nil
 	end)
 
 	serverHitEvent:Connect(function(player, hitPart, hitPosition, clientHitTimestamp, shotId, simType, speed)
-		if not hitPart or typeof(hitPart) ~= "Instance" or not hitPart:IsDescendantOf(Workspace) then return end
-		if not Checker.IsArgumentDataTypeValid(hitPosition) then return end
-		if not Checker.IsArgumentDataTypeValid(clientHitTimestamp) then return end
-		if not Checker.IsArgumentDataTypeValid(shotId) then return end
-		if not Checker.IsArgumentDataTypeValid(simType) then return end
+		if not hitPart or typeof(hitPart) ~= "Instance" or not hitPart:IsDescendantOf(Workspace) then
+			serverHitAckEvent:Fire(player, false, nil, nil, shotId)
+			return
+		end
+		if not Checker.IsArgumentDataTypeValid(hitPosition) then
+			serverHitAckEvent:Fire(player, false, nil, nil, shotId)
+			return
+		end
+		if not Checker.IsArgumentDataTypeValid(clientHitTimestamp) then
+			serverHitAckEvent:Fire(player, false, nil, nil, shotId)
+			return
+		end
+		if not Checker.IsArgumentDataTypeValid(shotId) then
+			serverHitAckEvent:Fire(player, false, nil, nil, shotId)
+			return
+		end
+		if not Checker.IsArgumentDataTypeValid(simType) then
+			serverHitAckEvent:Fire(player, false, nil, nil, shotId)
+			return
+		end
 
 		local playerShots = ActiveShots[player.UserId]
-		if not playerShots then return end
+		if not playerShots then
+			serverHitAckEvent:Fire(player, false, nil, nil, shotId)
+			return
+		end
 
 		local shotData = playerShots[shotId]
-		if not shotData then return end
+		if not shotData then
+			serverHitAckEvent:Fire(player, false, nil, nil, shotId)
+			return
+		end
 
 		local serverNow = Workspace:GetServerTimeNow()
 		local timeSinceFired = serverNow - shotData.clientFiredAt
@@ -107,6 +137,7 @@ function GPredictionService.GlobalInit(callbacks)
 
 		if timeSinceFired > allowedTime then
 			playerShots[shotId] = nil
+			serverHitAckEvent:Fire(player, false, nil, nil, shotId)
 			return
 		end
 
@@ -120,6 +151,7 @@ function GPredictionService.GlobalInit(callbacks)
 					historicalPosition = root.Position
 				else
 					playerShots[shotId] = nil
+					serverHitAckEvent:Fire(player, false, nil, nil, shotId)
 					return
 				end
 			end
@@ -127,6 +159,7 @@ function GPredictionService.GlobalInit(callbacks)
 			local positionError = (hitPosition - historicalPosition).Magnitude
 			if positionError > HIT_POSITION_TOLERANCE then
 				playerShots[shotId] = nil
+				serverHitAckEvent:Fire(player, false, nil, nil, shotId)
 				return
 			end
 		end
@@ -143,7 +176,8 @@ function GPredictionService.GlobalInit(callbacks)
 		else
 			warn("No Callback found for simType:", simType)
 		end
-		
+
+		serverHitAckEvent:Fire(player, true, hitPart, hitPosition, shotId)
 		serverHitEvent:FireAll(player, hitPart, hitPosition, shotId, simType)
 	end)
 

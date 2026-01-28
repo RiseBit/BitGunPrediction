@@ -31,6 +31,9 @@ local function RecordPositions()
 		local humanoid = character:FindFirstChildOfClass("Humanoid")
 		if not humanoid then continue end
 		
+		local rootPart = character:FindFirstChild("HumanoidRootPart")
+		if not rootPart then continue end
+		
 		local id = character
 		
 		if not History[id] then
@@ -39,7 +42,7 @@ local function RecordPositions()
 		
 		table.insert(History[id], {
 			time = now,
-			cframe = character:GetPivot() or character.CFrame
+			cframe = rootPart.CFrame
 		})
 		
 		while #History[id] > 0 and History[id][1].time < cutoffTime do
@@ -66,44 +69,116 @@ function HumanoidTracker.Start()
 	RunService.Heartbeat:Connect(RecordPositions)
 end
 
-function HumanoidTracker.GetPositionAtTime(character, targetTime)
+function HumanoidTracker.GetCFrameAtTime(character, targetTime)
 	if not character then return nil end
 	
 	local records = History[character]
-	
 	if not records or #records == 0 then
-		local root = character:FindFirstChild("HumanoidRootPart")
-		if root then
-			return root.Position
-		end
-		return nil
+		return character:GetPivot()
 	end
 	
 	if targetTime <= records[1].time then
-		return records[1].cframe.Position
+		return records[1].cframe
 	end
 	
 	if targetTime >= records[#records].time then
-		return records[#records].cframe.Position
+		return records[#records].cframe
 	end
 	
 	for i = 1, #records - 1 do
 		local currD = records[i]
 		local nextD = records[i + 1]
 		
-		-- find the Middle point in it :>
 		if targetTime >= currD.time and targetTime <= nextD.time then
 			local alpha = (targetTime - currD.time) / (nextD.time - currD.time)
-			return currD.cframe.Position:Lerp(nextD.cframe.Position, alpha)
+			return currD.cframe:Lerp(nextD.cframe, alpha)
 		end
 	end
 	
-	return records[#records].cframe.Position
+	return records[#records].cframe
 end
 
 function HumanoidTracker.GetHistory(character)
 	if not character then return nil end
 	return History[character]
+end
+
+function HumanoidTracker.RewindAll(targetTime, excludeCharacter)
+	local originalPositions = {}
+	
+	for character, _ in pairs(History) do
+		if character == excludeCharacter then continue end
+		if not character:IsDescendantOf(Workspace) then continue end
+		
+		originalPositions[character] = character:GetPivot()
+		
+		local historicalCFrame = HumanoidTracker.GetCFrameAtTime(character, targetTime)
+		if historicalCFrame then
+			character:PivotTo(historicalCFrame)
+		end
+	end
+	
+	return originalPositions
+end
+
+function HumanoidTracker.RestoreAll(originalPositions)
+	for character, cframe in pairs(originalPositions) do
+		if character:IsDescendantOf(Workspace) then
+			character:PivotTo(cframe)
+		end
+	end
+end
+
+--[[ =========  DEBUG VISUALIZATION  ========= ]]
+function HumanoidTracker.DrawDebugSphere(position, color, duration)
+	local sphere = Instance.new("Part")
+	sphere.Name = "DebugSphere"
+	sphere.Shape = Enum.PartType.Ball
+	sphere.Size = Vector3.new(2, 2, 2)
+	sphere.Position = position
+	sphere.Anchored = true
+	sphere.CanCollide = false
+	sphere.Transparency = 0.5
+	sphere.Color = color
+	sphere.Material = Enum.Material.Neon
+	sphere.Parent = Workspace
+	
+	task.delay(duration or 1, function()
+		sphere:Destroy()
+	end)
+	
+	return sphere
+end
+
+function HumanoidTracker.VisualizeHistory(character, color, duration)
+	local records = History[character]
+	if not records then return end
+	
+	for _, record in ipairs(records) do
+		HumanoidTracker.DrawDebugSphere(record.cframe.Position, color or Color3.fromRGB(255, 100, 100), duration or 1)
+	end
+end
+
+function HumanoidTracker.DrawDebugLine(startPos, endPos, color, duration)
+	local distance = (endPos - startPos).Magnitude
+	local midPoint = (startPos + endPos) / 2
+	
+	local line = Instance.new("Part")
+	line.Name = "DebugLine"
+	line.Size = Vector3.new(0.1, 0.1, distance)
+	line.CFrame = CFrame.lookAt(midPoint, endPos)
+	line.Anchored = true
+	line.CanCollide = false
+	line.Transparency = 0.3
+	line.Color = color
+	line.Material = Enum.Material.Neon
+	line.Parent = Workspace
+	
+	task.delay(duration or 1, function()
+		line:Destroy()
+	end)
+	
+	return line
 end
 
 return HumanoidTracker

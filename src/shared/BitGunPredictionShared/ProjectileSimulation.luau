@@ -1,9 +1,22 @@
 --[[
-	last edited: 25/01/2026
+	last edited: 28/01/2026
 	by: RiseBit, discord: risebit
 --]]
 
 --[[ =========  TYPE  ========= ]]
+export type TrajectoryArgs = {
+	Amplitude: number?,
+	Frequency: number?,
+	Radius: number?,
+	RotationSpeed: number?,
+	DecayRate: number?,
+	Acceleration: number?,
+	PeakTime: number?,
+	ControlPoint1: Vector3?,
+	ControlPoint2: Vector3?,
+	ControlOffset: Vector3?,
+}
+
 export type ConfigType = {
 	Origin: Vector3,
 	Direction: Vector3,
@@ -13,7 +26,8 @@ export type ConfigType = {
 	OnStep: (startCF: CFrame, endCF: CFrame) -> boolean,
 	OnFinish: () -> nil,
 	BulletKey: string,
-	SimulationType: string
+	SimulationType: string,
+	TrajectoryArgs: TrajectoryArgs?,
 }
 
 
@@ -324,7 +338,7 @@ function ProjectileSimulation.Create(config: ConfigType)
 		unitDir, 
 		config.Speed, 
 		config.Lifetime,
-		config.StartTime, 
+		config.StartTime or nil, 
 		TrajectoryCalculator[config.SimulationType], 
 		config.OnStep, 
 		config.OnFinish
@@ -348,6 +362,12 @@ function ProjectileSimulation.Create(config: ConfigType)
 		Removed = false,
 		TrajectoryCalculator = TrajectoryCalculator[config.SimulationType],
 	}
+	
+	if config.TrajectoryArgs then
+		for key, value in pairs(config.TrajectoryArgs) do
+			bullet[key] = value
+		end
+	end
 	
 	table.insert(ActiveProjectiles, bullet)
 	

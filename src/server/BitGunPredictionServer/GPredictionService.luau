@@ -1,5 +1,5 @@
 --[[
-	last edited: 25/01/2026
+	last edited: 28/01/2026
 	by: RiseBit, discord: risebit
 --]]
 
@@ -14,21 +14,23 @@ local Workspace = game:GetService("Workspace")
 local BitGunPredictionShared = ReplicatedStorage:WaitForChild("Shared"):WaitForChild("BitGunPredictionShared")
 local Checker = require(script.Parent.Checker)
 local Config = require(BitGunPredictionShared.Config)
+local ServerConfig = require(script.Parent.ServerConfig)
 local ProjectileSimulation = require(BitGunPredictionShared.ProjectileSimulation)
 local Comm = require(BitGunPredictionShared.Packages.Comm)
+local Signal = require(BitGunPredictionShared.Packages.Signal)
 local HumanoidTracker = require(script.Parent.HumanoidTracker)
 
 --[[ =========  CONSTANTS  ========= ]]
-local MAX_ORIGIN_DIST = 10 
-local MAX_LATENCY_BUFFER = 0.5
-local LATENCY_TOLERANCE = 0.15
-local HIT_POSITION_TOLERANCE = 15
-local SHOT_CLEANUP_INTERVAL = 5
 local CHECK_PREFIXES = "Check"
 
 --[[ =========  VARIABLES  ========= ]]
 local isInit = false
 local ActiveShots = {}
+
+--[[ =========  EVENTS  ========= ]]
+GPredictionService.OnProjectileFired = Signal.new()
+GPredictionService.OnHitValidated = Signal.new()
+GPredictionService.OnHitRejected = Signal.new()
 
 --[[ =========  HELPER  ========= ]]
 local function ValidateAndGetRoot(player, origin)
@@ -36,7 +38,7 @@ local function ValidateAndGetRoot(player, origin)
 	local root = player.Character:FindFirstChild("HumanoidRootPart")
 	if not root then return nil end
 	
-	if (origin - root.Position).Magnitude > MAX_ORIGIN_DIST then
+	if (origin - root.Position).Magnitude > ServerConfig.MaxOriginDist then
 		return nil
 	end
 	return root
@@ -57,9 +59,9 @@ end
 local function StartCleanupLoop()
 	task.spawn(function()
 		while true do
-			task.wait(SHOT_CLEANUP_INTERVAL)
+			task.wait(ServerConfig.ShotCleanupInterval)
 			for userId, _ in pairs(ActiveShots) do
-				CleanupPlayerShots(userId, MAX_LATENCY_BUFFER + 5)
+				CleanupPlayerShots(userId, ServerConfig.MaxLatencyBuffer + 5)
 			end
 		end
 	end)
@@ -77,7 +79,7 @@ local function GetCharacterFromPart(part)
 end
 
 --[[ =========  PUBLIC FUNCTION  ========= ]]
-function GPredictionService.GlobalInit(callbacks)
+function GPredictionService.GlobalInit(callbacks, USE_FULL_REWIND)
 	if isInit then
 		warn("[GPredictionService] already initialized!")
 		return
@@ -99,66 +101,106 @@ function GPredictionService.GlobalInit(callbacks)
 
 	serverHitEvent:Connect(function(player, hitPart, hitPosition, clientHitTimestamp, shotId, simType, speed)
 		if not hitPart or typeof(hitPart) ~= "Instance" or not hitPart:IsDescendantOf(Workspace) then
+			GPredictionService.OnHitRejected:Fire(player, hitPart, hitPosition, shotId, "InvalidInstance")
 			serverHitAckEvent:Fire(player, false, nil, nil, shotId)
 			return
 		end
 		if not Checker.IsArgumentDataTypeValid(hitPosition) then
+			GPredictionService.OnHitRejected:Fire(player, hitPart, hitPosition, shotId, "InvalidPosition")
 			serverHitAckEvent:Fire(player, false, nil, nil, shotId)
 			return
 		end
 		if not Checker.IsArgumentDataTypeValid(clientHitTimestamp) then
+			GPredictionService.OnHitRejected:Fire(player, hitPart, hitPosition, shotId, "InvalidTimestamp")
 			serverHitAckEvent:Fire(player, false, nil, nil, shotId)
 			return
 		end
 		if not Checker.IsArgumentDataTypeValid(shotId) then
+			GPredictionService.OnHitRejected:Fire(player, hitPart, hitPosition, shotId, "InvalidShotId")
 			serverHitAckEvent:Fire(player, false, nil, nil, shotId)
 			return
 		end
 		if not Checker.IsArgumentDataTypeValid(simType) then
+			GPredictionService.OnHitRejected:Fire(player, hitPart, hitPosition, shotId, "InvalidSimType")
 			serverHitAckEvent:Fire(player, false, nil, nil, shotId)
 			return
 		end
 
 		local playerShots = ActiveShots[player.UserId]
 		if not playerShots then
+			GPredictionService.OnHitRejected:Fire(player, hitPart, hitPosition, shotId, "NoActiveShots")
 			serverHitAckEvent:Fire(player, false, nil, nil, shotId)
 			return
 		end
 
 		local shotData = playerShots[shotId]
 		if not shotData then
+			GPredictionService.OnHitRejected:Fire(player, hitPart, hitPosition, shotId, "ShotNotFound")
 			serverHitAckEvent:Fire(player, false, nil, nil, shotId)
 			return
 		end
 
 		local serverNow = Workspace:GetServerTimeNow()
 		local timeSinceFired = serverNow - shotData.clientFiredAt
-		local allowedTime = shotData.latency + LATENCY_TOLERANCE + shotData.lifetime
+		local allowedTime = shotData.latency + ServerConfig.LatencyTolerance + shotData.lifetime
 
 		if timeSinceFired > allowedTime then
 			playerShots[shotId] = nil
+			GPredictionService.OnHitRejected:Fire(player, hitPart, hitPosition, shotId, "TimingExpired")
 			serverHitAckEvent:Fire(player, false, nil, nil, shotId)
 			return
 		end
 
 		local hitCharacter = GetCharacterFromPart(hitPart)
+		local originalPositions = nil
 		
-		if hitCharacter then
-			local historicalPosition = HumanoidTracker.GetPositionAtTime(hitCharacter, clientHitTimestamp)
+		if ServerConfig.UseFullRewind then
+			originalPositions = HumanoidTracker.RewindAll(clientHitTimestamp, player.Character)
+			
+			local rayParams = RaycastParams.new()
+			rayParams.FilterType = Enum.RaycastFilterType.Exclude
+			rayParams.FilterDescendantsInstances = {player.Character}
+			
+			local rayResult = Workspace:Raycast(shotData.origin, shotData.direction * (shotData.speed * shotData.lifetime), rayParams)
+			
+			HumanoidTracker.RestoreAll(originalPositions)
+			
+			if not rayResult then
+				playerShots[shotId] = nil
+				GPredictionService.OnHitRejected:Fire(player, hitPart, hitPosition, shotId, "FullRewindMiss")
+				serverHitAckEvent:Fire(player, false, nil, nil, shotId)
+				return
+			end
+			
+			local serverHitCharacter = GetCharacterFromPart(rayResult.Instance)
+			if serverHitCharacter ~= hitCharacter then
+				playerShots[shotId] = nil
+				GPredictionService.OnHitRejected:Fire(player, hitPart, hitPosition, shotId, "CharacterMismatch")
+				serverHitAckEvent:Fire(player, false, nil, nil, shotId)
+				return
+			end
+			
+			hitPart = rayResult.Instance
+			hitPosition = rayResult.Position
+
+		elseif hitCharacter then
+			local historicalPosition = HumanoidTracker.GetCFrameAtTime(hitCharacter, clientHitTimestamp).Position
 			if not historicalPosition then
 				local root = hitCharacter:FindFirstChild("HumanoidRootPart")
 				if root then
 					historicalPosition = root.Position
 				else
 					playerShots[shotId] = nil
+					GPredictionService.OnHitRejected:Fire(player, hitPart, hitPosition, shotId, "NoRootPart")
 					serverHitAckEvent:Fire(player, false, nil, nil, shotId)
 					return
 				end
 			end
 
 			local positionError = (hitPosition - historicalPosition).Magnitude
-			if positionError > HIT_POSITION_TOLERANCE then
+			if positionError > ServerConfig.HitPositionTolerance then
 				playerShots[shotId] = nil
+				GPredictionService.OnHitRejected:Fire(player, hitPart, hitPosition, shotId, "PositionMismatch")
 				serverHitAckEvent:Fire(player, false, nil, nil, shotId)
 				return
 			end
@@ -177,11 +219,20 @@ function GPredictionService.GlobalInit(callbacks)
 			warn("No Callback found for simType:", simType)
 		end
 
+		GPredictionService.OnHitValidated:Fire(player, hitPart, hitPosition, shotId, simType)
+		
+		if ServerConfig.Debug.Enabled then
+			HumanoidTracker.DrawDebugSphere(hitPosition, Color3.fromRGB(0, 255, 0), ServerConfig.Debug.DebugDuration)
+			if hitCharacter then
+				HumanoidTracker.VisualizeHistory(hitCharacter, ServerConfig.Debug.HistoryColor, ServerConfig.Debug.DebugDuration)
+			end
+		end
+		
 		serverHitAckEvent:Fire(player, true, hitPart, hitPosition, shotId)
 		serverHitEvent:FireAll(player, hitPart, hitPosition, shotId, simType)
 	end)
 
-	serverEvent:Connect(function(player, origin, direction, speed, lifetime, clientFiredAt, shotId, simType)
+	serverEvent:Connect(function(player, origin, direction, speed, lifetime, clientFiredAt, shotId, simType, trajectoryArgs)
 		if not Checker.IsArgumentDataTypeValid(origin) then return end
 		if not Checker.IsArgumentDataTypeValid(direction) then return end
 		if not Checker.IsArgumentDataTypeValid(speed) then return end
@@ -201,7 +252,7 @@ function GPredictionService.GlobalInit(callbacks)
 		local serverNow = Workspace:GetServerTimeNow()
 		local latency = serverNow - clientFiredAt
 		
-		if latency > MAX_LATENCY_BUFFER then return end
+		if latency > ServerConfig.MaxLatencyBuffer then return end
 
 		if not ActiveShots[player.UserId] then
 			ActiveShots[player.UserId] = {}
@@ -217,11 +268,11 @@ function GPredictionService.GlobalInit(callbacks)
 			firedAt = serverNow
 		}
 
-		local actualStartTime = math.max(clientFiredAt, serverNow - MAX_LATENCY_BUFFER)
+		local actualStartTime = math.max(clientFiredAt, serverNow - ServerConfig.MaxLatencyBuffer)
 		actualStartTime = math.min(actualStartTime, serverNow)
 
 		if type(ProjectileSimulation) ~= "table" then
-			warn("CRITICAL ERROR: ProjectileSimulation is not a table!")
+			warn("CRITICAL: ProjectileSimulation is not a table!")
 			return
 		end
 		
@@ -236,10 +287,12 @@ function GPredictionService.GlobalInit(callbacks)
 			end,
 			OnFinish = nil,
 			BulletKey = shotId,
-			SimulationType = simType
+			SimulationType = simType,
+			TrajectoryArgs = trajectoryArgs,
 		})
 
-		serverEvent:FireExcept(player, player, origin, direction, speed, lifetime, actualStartTime, shotId, simType)
+		GPredictionService.OnProjectileFired:Fire(player, origin, direction, speed, simType)
+		serverEvent:FireExcept(player, player, origin, direction, speed, lifetime, actualStartTime, shotId, simType, trajectoryArgs)
 	end)
 end
 

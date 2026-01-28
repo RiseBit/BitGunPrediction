@@ -8,6 +8,8 @@ A **client-side prediction** framework for Roblox projectile-based weapons. Prov
 
 ---
 
+DevForum: https://devforum.roblox.com/t/bitgunprediction-no-need-to-deal-with-annoying-client-prediction-or-lag-compensation-no-more/4294107/2
+
 ## ✨ Features
 
 - **Client-Side Prediction** – Instant visual feedback for projectiles, no waiting for server round-trip
